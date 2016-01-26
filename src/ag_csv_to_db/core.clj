@@ -11,18 +11,12 @@
 ;;
 ;;  Nick Brandaleone - January 2016
 
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
-; Command line options.
-(def cli-options
-  ;; An option with a required argument
-  [["-s" "--source FILE" "File in CSV format"
-    :default "/tmp/AG_database.csv"]
-  ["-o" "--output FILE" "Output File"
-   :default "/tmp/changes.db"]
-  ["-h" "--help"]])
-
-;; Files for testing. Fix: hard-coding output target-file. Bad...
+;; Global defs
 (def output-file "/tmp/changes.db")
+(def component-list (atom [])) ; keep track of all the components
+(def service-list (atom []))   ; keeps track of services
 
 ;; remove comments at beginning of file
 (defn remove-comments [text]
@@ -35,36 +29,53 @@
 
 ;; Extract the interesting part
 (def extract-role (juxt second third fourth))
+(def extract-service ())
+(def extract-component ())
 
 ;; Append to a file using spit, adding a newline
 (defn spitn [path text]
   (spit path (str text "\n") :append true))
 
 ;; Parse the role
-;; FIX: I hard-coded the service. I should either search the rows for a service, or be explicit in the CSV data format.
 (defn parse-role [role-data-row]
-  (let [[name desc icon] (extract-role role-data-row)]
-    (str "role=" name "; descr=" desc "; icon=" icon "; flags=shareable; qualifier=true; service=web_test always")))
+  (println (str "The service list is: " @service-list))
+  (let [[name desc icon] (extract-role role-data-row)
+        services @service-list]
+    (reset! service-list [])
+    (str "role=" name "; descr=" desc "; icon=" icon 
+         "; flags=shareable; qualifier=true; service="
+         (if (= 1 (count services)) (str (first services) " always")
+           (apply str (interpose ", always" services))))))
 
 ;; Parse the service.
-;; FIX: I hard-coded the components. I must make this dynamic.
 (defn parse-service [service-data-row]
-  (let [[type name desc icon] service-data-row]
-       (str type "=" name "; descr=" desc "; icon=" icon
-            "; start=host1_custom, host2_custom, host3_custom, host4_custom, host5_custom")))
+  (println (str "The component list is: " @component-list))
+  (let [[type name desc icon] service-data-row
+        components @component-list]
+    (reset! component-list [])
+    (swap! service-list conj name)
+    (str type "=" name "; descr=" desc "; icon=" icon
+            "; start=" (apply str (interpose "," components)))))
+
+; "host1_custom, host2_custom, host3_custom, host4_custom, host5_custom")))
 
 ;; Parse the components. For now only ipaccess
 (defn parse-component [component-data-row]
-  (let [[type name desc icon protocol mode lport dport host log] component-data-row]
+  (let [[type name desc icon protocol mode lport dport host log] 
+        component-data-row] ; we use all but icon
+    (swap! component-list conj name)
     (str type "=" name "; descr=" desc "; proto=" protocol 
-         "; locport=" lport "; mode=" mode "; desthosts=" host "; destports=" dport)))
+         "; locport=" lport "; mode=" mode "; desthosts=" 
+         host "; destports=" dport "; loglevel=" log)))
 
-;; Parse the data into various parts
+;;  text - represents a line of text from the CSV source file
 (defn parse [text]
-  (let [[type] text]; name desc icon protocol mode lport dport log
+"Parse the data into various parts and write new format to file"
+  (let [[type] text] 
+    ; type name desc icon protocol mode lport dport dhost log
     (spitn output-file
       (cond
-        (= "role" type)    (parse-role text)
+        (= "role" type)    (parse-role text) 
         (= "service" type) (parse-service text)
         (= "ipaccess" type)(parse-component text)))))
         ; else clause
@@ -72,6 +83,8 @@
 ;; macro `with-open` ensures that the file is closed when we are done with it
 ;; The file is read lazily, so it is best to use doall to force read.
 (defn read-csv [csv-file]
+  "reads the input file, one line at a time,
+  strips the comments at the beginning of the file, and parses the rest"
   (with-open [reader (io/reader csv-file)]
     (->> (csv/read-csv reader)
          (remove-comments)
@@ -97,6 +110,15 @@
         options-summary
         ""]
        (clojure.string/join \newline)))
+
+; Command line options.
+(def cli-options
+  ;; An option with a required argument
+  [["-s" "--source FILE" "File in CSV format"
+    :default "/tmp/AG_database.csv"]
+  ["-o" "--output FILE" "Output File"
+   :default "/tmp/changes.db"]
+  ["-h" "--help"]])
 
 (defn error-msg [errors]
   (str "The following errors occured while parsing your arguments:\n\n"
